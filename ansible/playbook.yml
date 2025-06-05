@@ -1,0 +1,72 @@
+- name: Setup EC2 with Docker Swarm and Yii2 App
+  hosts: webserver
+  become: yes
+  vars:
+    app_dir: /opt/yii2-app
+  tasks:
+    - name: Install dependencies
+      apt:
+        name:
+          - docker.io
+          - docker-compose
+          - nginx
+          - git
+          - unzip
+          - php-cli
+        update_cache: true
+
+    - name: Enable and start Docker
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Initialize Docker Swarm
+      shell: docker swarm init
+      register: swarm_init
+      failed_when: false
+      changed_when: "'Swarm initialized' in swarm_init.stdout"
+
+    - name: Copy Yii2 app to EC2
+      copy:
+        src: ../yii2-app/
+        dest: "{{ app_dir }}/"
+        owner: ubuntu
+        group: ubuntu
+        mode: 0755
+
+    - name: Copy Dockerfile
+      copy:
+        src: ../docker/Dockerfile
+        dest: "{{ app_dir }}/Dockerfile"
+
+    - name: Build Docker image
+      shell: docker build -t yii2-app:latest .
+      args:
+        chdir: "{{ app_dir }}"
+
+    - name: Create Swarm service
+      shell: docker service create --name yii2-app --publish published=9000,target=9000 yii2-app:latest
+      failed_when: false
+
+    - name: Copy nginx.conf
+      copy:
+        src: ../docker/nginx.conf
+        dest: /etc/nginx/sites-available/yii2-app
+
+    - name: Enable NGINX site
+      file:
+        src: /etc/nginx/sites-available/yii2-app
+        dest: /etc/nginx/sites-enabled/yii2-app
+        state: link
+        force: yes
+
+    - name: Remove default site
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+
+    - name: Restart NGINX
+      service:
+        name: nginx
+        state: restarted
